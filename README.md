@@ -62,7 +62,7 @@ RECIPIENT_EMAIL="recipient-email@example.com"
 To start the script in its default scheduled mode, simply run:
 
 ```bash
-node index.js
+npm start
 ```
 
 By default, the script is scheduled to post at a random minute between 9:00 and 9:59 AM on every Tuesday and Thursday. You can see the exact scheduled time in the console when you start the script.
@@ -72,7 +72,7 @@ By default, the script is scheduled to post at a random minute between 9:00 and 
 To run the script once immediately and bypass the schedule, use the `--now` flag:
 
 ```bash
-node index.js --now
+npm start -- --now
 ```
 
 The script will execute the posting logic one time and then exit.
