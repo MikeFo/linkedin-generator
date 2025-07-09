@@ -8,7 +8,10 @@ node_modules/
 
 # Runtime state and log files
 posted_history.json
-error.log
+
+# General log files
+*.log
+npm-debug.log*
 
 # macOS specific
 .DS_Store

@@ -73,7 +73,7 @@ async function loginToLinkedIn(page) {
         await page.type('#password', process.env.LINKEDIN_PASSWORD, { delay: 50 });
 
         const submitButtonSelector = 'button[type="submit"]';
-        await page.waitForSelector(postButtonSelector, { visible: true, timeout: 10000 });
+        await page.waitForSelector(submitButtonSelector, { visible: true, timeout: 10000 });
         await Promise.all([
             page.click(submitButtonSelector),
             page.waitForNavigation(),
