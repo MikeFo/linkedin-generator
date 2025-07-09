@@ -3,10 +3,12 @@ const puppeteer = require('puppeteer');
 const cron = require('node-cron');
 const fs = require('fs');
 const nodemailer = require('nodemailer');
+const path = require('path');
 
 // Load content from content.json
 const content = JSON.parse(fs.readFileSync('content.json', 'utf8'));
-const HISTORY_FILE = 'posted_history.json';
+// Use the Render Disk mount path if available, otherwise use the local directory.
+const HISTORY_FILE = path.join(process.env.RENDER_DISK_MOUNT_PATH || '.', 'posted_history.json');
 
 /**
  * Reads the history of posted messages from a file.

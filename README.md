@@ -32,6 +32,11 @@ A Node.js script that automatically posts pre-defined content to a LinkedIn prof
     # If omitted, a random topic will be chosen.
     # POST_TOPIC=learningAndDevelopment
 
+    # Recommended for deployment on services like Render:
+    # This tells Puppeteer to use a persistent disk for its browser cache,
+    # which speeds up builds and ensures the browser is found.
+    # PUPPETEER_CACHE_DIR="/data/puppeteer_cache"
+
     # Optional: Email Notification Settings (using Gmail as an example)
     # The sender's email address. For Gmail, you may need to use an "App Password".
     NOTIFICATION_EMAIL="your-email@gmail.com"
