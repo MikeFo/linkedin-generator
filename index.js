@@ -35,7 +35,13 @@ function selectPostContent() {
     let topicsToTry = [];
 
     if (process.env.POST_TOPIC) {
-        topicsToTry = [process.env.POST_TOPIC];
+        const specifiedTopic = process.env.POST_TOPIC;
+        if (!content.topics[specifiedTopic]) {
+            console.error(`❌ The topic "${specifiedTopic}" specified in POST_TOPIC was not found in content.json.`);
+            console.error(`Available topics are: ${Object.keys(content.topics).join(', ')}`);
+            return null;
+        }
+        topicsToTry = [specifiedTopic];
     } else {
         // Shuffle topics to ensure variety if the first choice is exhausted
         topicsToTry = Object.keys(content.topics).sort(() => 0.5 - Math.random());
@@ -48,7 +54,7 @@ function selectPostContent() {
 
     for (const topic of topicsToTry) {
         console.log(`Trying to find an unposted message in topic: ${topic}`);
-        const topicContent = content.topics[topic] || [];
+        const topicContent = content.topics[topic];
         const unpostedMessages = topicContent.filter(post => !postedHistory.includes(post.message));
 
         if (unpostedMessages.length > 0) {
