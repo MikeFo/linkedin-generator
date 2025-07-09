@@ -146,7 +146,14 @@ async function postToLinkedIn() {
 
     let browser;
     try {
-        browser = await puppeteer.launch({ headless: "new" });
+        // Add args for compatibility with cloud/container environments
+        browser = await puppeteer.launch({
+            headless: "new",
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox'
+            ]
+        });
         const page = await browser.newPage();
         await page.setViewport({ width: 1280, height: 800 });
 
