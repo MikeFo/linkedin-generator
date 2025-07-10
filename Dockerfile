@@ -21,12 +21,6 @@ RUN npm ci
 # The .dockerignore file will prevent copying unnecessary files.
 COPY . .
 
-# --- CHOOSE ONE CMD ---
-
-# OPTION 1: For "Background Worker" services that run continuously.
-# This starts the script with its internal node-cron scheduler.
+# This is the command for our "Background Worker" service.
+# It starts the script with its internal node-cron scheduler, which keeps the process running.
 CMD [ "npm", "start" ]
-
-# OPTION 2: For "Cron Job" services that are triggered externally by the platform.
-# This runs the script once and then exits.
-# CMD [ "npm", "start", "--", "--now" ]

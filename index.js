@@ -87,16 +87,14 @@ async function loginToLinkedIn(page) {
 
         const submitButtonSelector = 'button[type="submit"]';
         await page.waitForSelector(submitButtonSelector, { visible: true, timeout: 10000 });
-        await Promise.all([
-            page.click(submitButtonSelector),
-            // Wait for the network to be idle, which is a more reliable sign that the page has loaded.
-            page.waitForNavigation({ waitUntil: 'networkidle0' }),
-        ]);
+        await page.click(submitButtonSelector);
 
-        // After login, we verify that we've landed on the feed page by looking for a key element.
-        // This is more reliable than just assuming the navigation succeeded.
+        // After clicking login, we wait for the main feed element to appear.
+        // This is more reliable than waiting for a full navigation event, which may not happen
+        // on a modern single-page application like LinkedIn.
         const feedSelector = '.scaffold-layout__main'; // A selector for the main content area of the feed.
-        await page.waitForSelector(feedSelector, { visible: true, timeout: 15000 });
+        // We give this a generous timeout to account for slow network or a CAPTCHA challenge.
+        await page.waitForSelector(feedSelector, { visible: true, timeout: 45000 });
 
         console.log('✅ Login successful and feed loaded.');
     } catch (loginError) {
@@ -158,14 +156,15 @@ function updateHistory(message) {
  * Main orchestrator function to run the entire posting process.
  */
 async function postToLinkedIn() {
-    const postContent = selectPostContent();
-    if (!postContent) {
-        await sendNotification('LinkedIn Bot - Content Error', 'Failed to select content. Check content.json and topic configuration.');
-        return;
-    }
-
     let browser;
     try {
+        const postContent = selectPostContent();
+        if (!postContent) {
+            // Send notification and throw an error to be caught by the retry handler
+            await sendNotification('LinkedIn Bot - Content Error', 'Failed to select content. Check content.json and topic configuration.');
+            throw new Error("Failed to select content. Halting execution.");
+        }
+
         // Add args for compatibility with cloud/container environments
         browser = await puppeteer.launch({
             headless: "new",
@@ -186,11 +185,6 @@ async function postToLinkedIn() {
         console.log('✅ Post submitted successfully!');
         await sendNotification('LinkedIn Bot - Post Success', `Successfully posted: "${postContent}"`);
         updateHistory(postContent);
-    } catch (error) {
-        console.error(`❌ An error occurred during the posting process: ${error.message}`);
-        // This is a catch-all for any error during the process (e.g., browser launch, page creation).
-        // We send a general failure notification to ensure we're always alerted.
-        await sendNotification('LinkedIn Bot - General Failure', `The bot failed with an unexpected error: ${error.message}`);
     } finally {
         if (browser) {
             await browser.close();
@@ -232,11 +226,46 @@ async function sendNotification(subject, message) {
     }
 }
 
+/**
+ * A simple delay helper function.
+ * @param {number} ms Milliseconds to wait.
+ */
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Wraps the main posting logic with a retry mechanism to handle transient errors.
+ */
+async function runWithRetries() {
+    const MAX_RETRIES = 3;
+    const INITIAL_DELAY_MINUTES = 1;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            console.log(`🚀 Starting LinkedIn post attempt ${attempt} of ${MAX_RETRIES}...`);
+            await postToLinkedIn();
+            console.log('✅✅ Process completed successfully in this attempt.');
+            return; // Success, so we exit the function.
+        } catch (error) {
+            console.error(`❌ Attempt ${attempt} failed: ${error.message}`);
+            if (attempt < MAX_RETRIES) {
+                // Exponential backoff: wait 1 min, then 5 mins.
+                const delayMinutes = INITIAL_DELAY_MINUTES * Math.pow(5, attempt - 1);
+                const delayMs = delayMinutes * 60 * 1000;
+                console.log(`🕒 Waiting ${delayMinutes} minutes before next attempt...`);
+                await delay(delayMs);
+            } else {
+                console.error('❌❌ All retry attempts have failed. The bot will not try again until the next scheduled run.');
+                await sendNotification('LinkedIn Bot - All Retries Failed', `The bot failed to post after ${MAX_RETRIES} attempts. Please check the logs. Last error: ${error.message}`);
+            }
+        }
+    }
+}
+
 const shouldPostNow = process.argv.includes('--now');
 
 if (shouldPostNow) {
     console.log('🚀 --now flag detected. Posting immediately for a single run...');
-    postToLinkedIn(); // This will run once and then the script will exit.
+    runWithRetries(); // This will run once (with retries) and then the script will exit.
 } else {
     // Schedule to run at a random minute between 9:00 and 9:59 AM on Tuesday and Thursday.
     // This makes the posting time less predictable and more human-like.
@@ -246,5 +275,5 @@ if (shouldPostNow) {
 
     console.log(`⏰ Script started. LinkedIn post is scheduled to run at ${hour}:${String(randomMinute).padStart(2, '0')} on the next upcoming Tuesday or Thursday.`);
     console.log('This process will keep running in the foreground. Press Ctrl+C to stop or run with a process manager like pm2.');
-    cron.schedule(cronExpression, postToLinkedIn);
+    cron.schedule(cronExpression, runWithRetries);
 }
