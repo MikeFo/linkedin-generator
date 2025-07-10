@@ -1,4 +1,9 @@
-require('dotenv').config();
+// In production environments like Render, environment variables are injected directly.
+// We only need to load the .env file when running locally for development.
+// We can check for the presence of a Render-specific environment variable to determine this.
+if (!process.env.RENDER) {
+  require('dotenv').config();
+}
 const puppeteer = require('puppeteer');
 const cron = require('node-cron');
 const fs = require('fs');
@@ -7,7 +12,7 @@ const path = require('path');
 
 // Load content from content.json
 const content = JSON.parse(fs.readFileSync('content.json', 'utf8'));
-// Use the Render Disk mount path if available, otherwise use the local directory.
+// Use the Render Disk mou nt path if available, otherwise use the local directory.
 const HISTORY_FILE = path.join(process.env.RENDER_DISK_MOUNT_PATH || '.', 'posted_history.json');
 
 /**
@@ -84,12 +89,19 @@ async function loginToLinkedIn(page) {
         await page.waitForSelector(submitButtonSelector, { visible: true, timeout: 10000 });
         await Promise.all([
             page.click(submitButtonSelector),
-            page.waitForNavigation(),
+            // Wait for the network to be idle, which is a more reliable sign that the page has loaded.
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
         ]);
-        console.log('✅ Login successful.');
+
+        // After login, we verify that we've landed on the feed page by looking for a key element.
+        // This is more reliable than just assuming the navigation succeeded.
+        const feedSelector = '.scaffold-layout__main'; // A selector for the main content area of the feed.
+        await page.waitForSelector(feedSelector, { visible: true, timeout: 15000 });
+
+        console.log('✅ Login successful and feed loaded.');
     } catch (loginError) {
-        console.error('❌ Login failed:', loginError);
-        await sendNotification('LinkedIn Bot - Login Failed', `Login failed with error: ${loginError}`);
+        console.error('❌ Login failed. Could not verify the feed page after login attempt.', loginError);
+        await sendNotification('LinkedIn Bot - Login Failed', `Login failed. The script could not find the main feed element after attempting to log in. Error: ${loginError}`);
         throw loginError; // Re-throw to stop the execution flow
     }
 }
@@ -113,10 +125,16 @@ async function createLinkedInPost(page, postContent) {
 
         const postButtonSelector = 'button[data-control-name="share.post"]';
         await page.waitForSelector(postButtonSelector, { visible: true, timeout: 10000 });
-        await page.click(postButtonSelector);
+        // It's better to wait for navigation or a confirmation signal after a click.
+        // Here, we'll click and then wait for the "Post successful" toast message.
+        await Promise.all([
+            page.click(postButtonSelector),
+            page.waitForSelector('.artdeco-toast-item--success', { visible: true, timeout: 15000 })
+        ]);
+        console.log('✅ Post submitted and success notification confirmed.');
     } catch (postError) {
-        console.error('❌ Failed during post creation:', postError);
-        await sendNotification('LinkedIn Bot - Post Creation Failed', `Failed to create post: ${postError}`);
+        console.error('❌ Failed during post creation. Could not confirm post success toast.', postError);
+        await sendNotification('LinkedIn Bot - Post Creation Failed', `Failed to create post. The script did not detect the 'Post successful' confirmation. Error: ${postError}`);
         throw postError;
     }
 }
@@ -151,6 +169,9 @@ async function postToLinkedIn() {
         // Add args for compatibility with cloud/container environments
         browser = await puppeteer.launch({
             headless: "new",
+            // When running in a container, we should be explicit about the executable path.
+            // The official Puppeteer image sets this environment variable for us.
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox'
@@ -167,8 +188,9 @@ async function postToLinkedIn() {
         updateHistory(postContent);
     } catch (error) {
         console.error(`❌ An error occurred during the posting process: ${error.message}`);
-        // Individual functions already send specific notifications.
-        // A general failure notification could be sent here if desired.
+        // This is a catch-all for any error during the process (e.g., browser launch, page creation).
+        // We send a general failure notification to ensure we're always alerted.
+        await sendNotification('LinkedIn Bot - General Failure', `The bot failed with an unexpected error: ${error.message}`);
     } finally {
         if (browser) {
             await browser.close();

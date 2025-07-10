@@ -1,0 +1,16 @@
+# This file tells Docker which files and directories to ignore when building the image.
+# It helps keep the image small and prevents sensitive information from being included.
+
+# Node.js
+node_modules
+npm-debug.log
+
+# Application runtime files
+posted_history.json
+
+# Environment variables (should be injected at runtime, not built into the image)
+.env
+
+# Git files
+.git
+.gitignore
