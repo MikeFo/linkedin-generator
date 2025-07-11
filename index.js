@@ -89,17 +89,26 @@ async function loginToLinkedIn(page) {
         await page.waitForSelector(submitButtonSelector, { visible: true, timeout: 10000 });
         await page.click(submitButtonSelector);
 
-        // After clicking login, we wait for the main feed element to appear.
-        // This is more reliable than waiting for a full navigation event, which may not happen
-        // on a modern single-page application like LinkedIn.
-        const feedSelector = '.scaffold-layout__main'; // A selector for the main content area of the feed.
+        // After clicking login, we wait for the "Start a post" button to appear on the feed.
+        // This is a more reliable indicator of a successful login and feed load than a generic layout selector,
+        // which can change frequently with LinkedIn UI updates.
+        const feedConfirmationSelector = '.share-box-feed-entry__trigger';
         // We give this a generous timeout to account for slow network or a CAPTCHA challenge.
-        await page.waitForSelector(feedSelector, { visible: true, timeout: 45000 });
+        await page.waitForSelector(feedConfirmationSelector, { visible: true, timeout: 45000 });
 
         console.log('✅ Login successful and feed loaded.');
     } catch (loginError) {
         console.error('❌ Login failed. Could not verify the feed page after login attempt.', loginError);
-        await sendNotification('LinkedIn Bot - Login Failed', `Login failed. The script could not find the main feed element after attempting to log in. Error: ${loginError}`);
+        const screenshotPath = path.join(process.env.RENDER_DISK_MOUNT_PATH || '.', 'login-failure-screenshot.png');
+        try {
+            await page.screenshot({ path: screenshotPath, fullPage: true });
+            console.log(`📸 Screenshot of the failure saved to ${screenshotPath}`);
+            await sendNotification('LinkedIn Bot - Login Failed', `Login failed. The script could not find the main feed element after attempting to log in. A screenshot was saved to the server. Error: ${loginError}`);
+        } catch (screenshotError) {
+            console.error('❌ Failed to take screenshot:', screenshotError);
+            // Fallback to original notification if screenshot fails
+            await sendNotification('LinkedIn Bot - Login Failed', `Login failed. The script could not find the main feed element after attempting to log in. Error: ${loginError}`);
+        }
         throw loginError; // Re-throw to stop the execution flow
     }
 }
