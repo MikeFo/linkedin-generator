@@ -4,7 +4,11 @@
 if (!process.env.RENDER) {
   require('dotenv').config();
 }
-const puppeteer = require('puppeteer');
+// Use puppeteer-extra to apply stealth plugins and make the browser less detectable.
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+puppeteer.use(StealthPlugin());
+
 const cron = require('node-cron');
 const fs = require('fs');
 const nodemailer = require('nodemailer');
@@ -80,36 +84,64 @@ function selectPostContent() {
  * @param {import('puppeteer').Page} page The Puppeteer page object.
  */
 async function loginToLinkedIn(page) {
+    const feedConfirmationSelector = '.share-box-feed-entry__trigger';
+
+    // Go to the feed page directly. If we have a valid session cookie, this will work.
+    // If not, LinkedIn will redirect to a login page.
+    await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'networkidle2', timeout: 60000 });
+
+    // Check if we are already logged in by looking for a key element on the feed.
+    const isLoggedIn = await page.waitForSelector(feedConfirmationSelector, { visible: true, timeout: 10000 })
+        .then(() => true)
+        .catch(() => false);
+
+    if (isLoggedIn) {
+        console.log('✅ Already logged in. Reusing existing session.');
+        return; // We are logged in, no need to do anything else.
+    }
+
+    // If we're not logged in, proceed with the login flow.
+    console.log('➡️ Session not active or expired. Proceeding with login flow...');
+
+    // Before trying to input credentials, let's check if LinkedIn has presented a security challenge page.
+    // This is a common reason for login failures in automated environments.
+    const securityCheckSelector = '#challenge-form, #captcha-internal, [data-id="challenge-form"]';
+    const onSecurityPage = await page.waitForSelector(securityCheckSelector, { visible: true, timeout: 5000 })
+        .then(() => true)
+        .catch(() => false);
+
+    if (onSecurityPage) {
+        const errorMsg = 'LinkedIn is presenting a security check (e.g., CAPTCHA or PIN). Manual intervention is required in the browser to clear this before the bot can run again.';
+        // We throw a specific error here because the script cannot proceed.
+        throw new Error(errorMsg);
+    }
+
     try {
-        await page.goto('https://www.linkedin.com/login');
+        console.log('➡️ Attempting to fill login form...');
+        // The page should have already redirected to the login page.
+        // We just need to find the input fields and fill them out.
+        await page.waitForSelector('#username', { visible: true, timeout: 10000 });
         await page.type('#username', process.env.LINKEDIN_EMAIL, { delay: 50 });
         await page.type('#password', process.env.LINKEDIN_PASSWORD, { delay: 50 });
-
         const submitButtonSelector = 'button[type="submit"]';
         await page.waitForSelector(submitButtonSelector, { visible: true, timeout: 10000 });
         await page.click(submitButtonSelector);
 
-        // After clicking login, we wait for the "Start a post" button to appear on the feed.
-        // This is a more reliable indicator of a successful login and feed load than a generic layout selector,
-        // which can change frequently with LinkedIn UI updates.
-        const feedConfirmationSelector = '.share-box-feed-entry__trigger';
-        // We give this a generous timeout to account for slow network or a CAPTCHA challenge.
+        // After clicking login, wait for the feed to load successfully.
         await page.waitForSelector(feedConfirmationSelector, { visible: true, timeout: 45000 });
-
-        console.log('✅ Login successful and feed loaded.');
+        console.log('✅ Login successful and new session created.');
     } catch (loginError) {
         console.error('❌ Login failed. Could not verify the feed page after login attempt.', loginError);
         const screenshotPath = path.join(process.env.RENDER_DISK_MOUNT_PATH || '.', 'login-failure-screenshot.png');
         try {
             await page.screenshot({ path: screenshotPath, fullPage: true });
             console.log(`📸 Screenshot of the failure saved to ${screenshotPath}`);
-            await sendNotification('LinkedIn Bot - Login Failed', `Login failed. The script could not find the main feed element after attempting to log in. A screenshot was saved to the server. Error: ${loginError}`);
+            await sendNotification('LinkedIn Bot - Login Failed', `Login failed. This could be due to a CAPTCHA, 2FA prompt, or a UI change. A screenshot was saved to the server. Error: ${loginError}`);
         } catch (screenshotError) {
             console.error('❌ Failed to take screenshot:', screenshotError);
-            // Fallback to original notification if screenshot fails
             await sendNotification('LinkedIn Bot - Login Failed', `Login failed. The script could not find the main feed element after attempting to log in. Error: ${loginError}`);
         }
-        throw loginError; // Re-throw to stop the execution flow
+        throw loginError;
     }
 }
 
@@ -120,20 +152,24 @@ async function loginToLinkedIn(page) {
  */
 async function createLinkedInPost(page, postContent) {
     try {
-        await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'networkidle2' });
+        // The login function already leaves us on the feed page, so no need to navigate again.
+        // This avoids an unnecessary page load and potential session issues.
 
         const startPostSelector = '.share-box-feed-entry__trigger';
         await page.waitForSelector(startPostSelector, { visible: true, timeout: 10000 });
         await page.click(startPostSelector);
 
-        const textBoxSelector = 'div[role="textbox"]';
+        // Use a more specific selector for the text box inside the post creation modal.
+        // The .ql-editor class is commonly used for rich text editors like LinkedIn's.
+        const textBoxSelector = '.ql-editor[role="textbox"]';
         await page.waitForSelector(textBoxSelector, { visible: true, timeout: 10000 });
-        await page.type(textBoxSelector, postContent, { delay: 10 });
+        await page.type(textBoxSelector, postContent, { delay: 75 }); // Slightly increased delay for more human-like typing
 
-        const postButtonSelector = 'button[data-control-name="share.post"]';
-        await page.waitForSelector(postButtonSelector, { visible: true, timeout: 10000 });
-        // It's better to wait for navigation or a confirmation signal after a click.
-        // Here, we'll click and then wait for the "Post successful" toast message.
+        // Wait for the post button to become enabled after typing content.
+        // This is more reliable than just waiting for it to be visible.
+        const postButtonSelector = '.share-actions__primary-action';
+        await page.waitForSelector(`${postButtonSelector}:not([disabled])`, { visible: true, timeout: 10000 });
+
         await Promise.all([
             page.click(postButtonSelector),
             page.waitForSelector('.artdeco-toast-item--success', { visible: true, timeout: 15000 })
@@ -141,7 +177,16 @@ async function createLinkedInPost(page, postContent) {
         console.log('✅ Post submitted and success notification confirmed.');
     } catch (postError) {
         console.error('❌ Failed during post creation. Could not confirm post success toast.', postError);
-        await sendNotification('LinkedIn Bot - Post Creation Failed', `Failed to create post. The script did not detect the 'Post successful' confirmation. Error: ${postError}`);
+        // Taking a screenshot on post failure is crucial for debugging UI issues.
+        const screenshotPath = path.join(process.env.RENDER_DISK_MOUNT_PATH || '.', 'post-failure-screenshot.png');
+        try {
+            await page.screenshot({ path: screenshotPath, fullPage: true });
+            console.log(`📸 Screenshot of the post failure saved to ${screenshotPath}`);
+            await sendNotification('LinkedIn Bot - Post Creation Failed', `Failed to create post. A screenshot was saved to the server. Error: ${postError}`);
+        } catch (screenshotError) {
+            console.error('❌ Failed to take screenshot during post error:', screenshotError);
+            await sendNotification('LinkedIn Bot - Post Creation Failed', `Failed to create post. The script did not detect the 'Post successful' confirmation. Error: ${postError}`);
+        }
         throw postError;
     }
 }
@@ -174,12 +219,18 @@ async function postToLinkedIn() {
             throw new Error("Failed to select content. Halting execution.");
         }
 
+        // Define a persistent user data directory to maintain login sessions across runs.
+        // This is crucial for avoiding repeated logins that can trigger security checks.
+        const userDataDir = path.join(process.env.RENDER_DISK_MOUNT_PATH || '.', 'puppeteer_user_data');
+        console.log(`ℹ️  Using user data directory: ${userDataDir}`);
+
         // Add args for compatibility with cloud/container environments
         browser = await puppeteer.launch({
             headless: "new",
             // When running in a container, we should be explicit about the executable path.
             // The official Puppeteer image sets this environment variable for us.
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+            userDataDir: userDataDir, // Use the persistent user data directory
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox'
