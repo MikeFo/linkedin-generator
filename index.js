@@ -13,11 +13,12 @@ const cron = require('node-cron');
 const fs = require('fs');
 const nodemailer = require('nodemailer');
 const path = require('path');
+const config = require('./config');
 
 // Load content from content.json
 const content = JSON.parse(fs.readFileSync('content.json', 'utf8'));
 // Use the Render Disk mou nt path if available, otherwise use the local directory.
-const HISTORY_FILE = path.join(process.env.RENDER_DISK_MOUNT_PATH || '.', 'posted_history.json');
+const HISTORY_FILE = path.join(process.env.RENDER_DISK_MOUNT_PATH || '.', 'posted_history.json'); // Note: path not in config as it's specific to this file's logic
 
 /**
  * Reads the history of posted messages from a file.
@@ -84,14 +85,12 @@ function selectPostContent() {
  * @param {import('puppeteer').Page} page The Puppeteer page object.
  */
 async function loginToLinkedIn(page) {
-    const feedConfirmationSelector = '.share-box-feed-entry__trigger';
-
     // Go to the feed page directly. If we have a valid session cookie, this will work.
     // If not, LinkedIn will redirect to a login page.
-    await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'networkidle2', timeout: 60000 });
+    await page.goto(config.urls.feed, { waitUntil: 'networkidle2', timeout: config.timeouts.navigation });
 
     // Check if we are already logged in by looking for a key element on the feed.
-    const isLoggedIn = await page.waitForSelector(feedConfirmationSelector, { visible: true, timeout: 10000 })
+    const isLoggedIn = await page.waitForSelector(config.selectors.feedConfirmation, { visible: true, timeout: config.timeouts.element })
         .then(() => true)
         .catch(() => false);
 
@@ -105,8 +104,7 @@ async function loginToLinkedIn(page) {
 
     // Before trying to input credentials, let's check if LinkedIn has presented a security challenge page.
     // This is a common reason for login failures in automated environments.
-    const securityCheckSelector = '#challenge-form, #captcha-internal, [data-id="challenge-form"]';
-    const onSecurityPage = await page.waitForSelector(securityCheckSelector, { visible: true, timeout: 5000 })
+    const onSecurityPage = await page.waitForSelector(config.selectors.securityCheck, { visible: true, timeout: 5000 })
         .then(() => true)
         .catch(() => false);
 
@@ -117,22 +115,36 @@ async function loginToLinkedIn(page) {
     }
 
     try {
-        console.log('➡️ Attempting to fill login form...');
         // The page should have already redirected to the login page.
         // We just need to find the input fields and fill them out.
-        await page.waitForSelector('#username', { visible: true, timeout: 10000 });
+        await page.waitForSelector(config.selectors.loginUsername, { visible: true, timeout: config.timeouts.element });
         await page.type('#username', process.env.LINKEDIN_EMAIL, { delay: 50 });
         await page.type('#password', process.env.LINKEDIN_PASSWORD, { delay: 50 });
-        const submitButtonSelector = 'button[type="submit"]';
-        await page.waitForSelector(submitButtonSelector, { visible: true, timeout: 10000 });
-        await page.click(submitButtonSelector);
+        await page.waitForSelector(config.selectors.loginSubmit, { visible: true, timeout: config.timeouts.element });
+        await page.click(config.selectors.loginSubmit);
 
-        // After clicking login, wait for the feed to load successfully.
-        await page.waitForSelector(feedConfirmationSelector, { visible: true, timeout: 45000 });
+        // After submitting, we must determine what page loads next. It could be the feed (success)
+        // or another security challenge (failure). We use Promise.race to see what appears first.
+        console.log('➡️ Verifying page after login submission...');
+        await Promise.race([
+            page.waitForSelector(config.selectors.feedConfirmation, { visible: true, timeout: config.timeouts.verification }),
+            page.waitForSelector(config.selectors.securityCheck, { visible: true, timeout: config.timeouts.verification }).then(() => {
+                // If the security check selector appears first, we throw a specific error to be caught below.
+                throw new Error('LinkedIn presented a security challenge *after* submitting credentials. Manual intervention is required.');
+            })
+        ]);
         console.log('✅ Login successful and new session created.');
     } catch (loginError) {
+        // Enhance error reporting by checking the URL for security checkpoints.
+        const currentUrl = page.url();
+        if (config.urls.securityChallenge.test(currentUrl)) {
+            const specificError = new Error(`Login failed: LinkedIn is blocked by a security checkpoint page at ${currentUrl}. Manual intervention is required.`);
+            console.error(`❌ ${specificError.message}`);
+            throw specificError; // Throw a more informative error
+        }
+
         console.error('❌ Login failed. Could not verify the feed page after login attempt.', loginError);
-        const screenshotPath = path.join(process.env.RENDER_DISK_MOUNT_PATH || '.', 'login-failure-screenshot.png');
+        const screenshotPath = path.join(process.env.RENDER_DISK_MOUNT_PATH || '.', config.paths.loginScreenshot);
         try {
             await page.screenshot({ path: screenshotPath, fullPage: true });
             console.log(`📸 Screenshot of the failure saved to ${screenshotPath}`);
@@ -155,30 +167,27 @@ async function createLinkedInPost(page, postContent) {
         // The login function already leaves us on the feed page, so no need to navigate again.
         // This avoids an unnecessary page load and potential session issues.
 
-        const startPostSelector = '.share-box-feed-entry__trigger';
-        await page.waitForSelector(startPostSelector, { visible: true, timeout: 10000 });
-        await page.click(startPostSelector);
+        await page.waitForSelector(config.selectors.postStart, { visible: true, timeout: config.timeouts.element });
+        await page.click(config.selectors.postStart);
 
         // Use a more specific selector for the text box inside the post creation modal.
         // The .ql-editor class is commonly used for rich text editors like LinkedIn's.
-        const textBoxSelector = '.ql-editor[role="textbox"]';
-        await page.waitForSelector(textBoxSelector, { visible: true, timeout: 10000 });
-        await page.type(textBoxSelector, postContent, { delay: 75 }); // Slightly increased delay for more human-like typing
+        await page.waitForSelector(config.selectors.postTextBox, { visible: true, timeout: config.timeouts.element });
+        await page.type(config.selectors.postTextBox, postContent, { delay: 75 }); // Slightly increased delay for more human-like typing
 
         // Wait for the post button to become enabled after typing content.
         // This is more reliable than just waiting for it to be visible.
-        const postButtonSelector = '.share-actions__primary-action';
-        await page.waitForSelector(`${postButtonSelector}:not([disabled])`, { visible: true, timeout: 10000 });
+        await page.waitForSelector(config.selectors.postSubmitEnabled, { visible: true, timeout: config.timeouts.element });
 
         await Promise.all([
-            page.click(postButtonSelector),
-            page.waitForSelector('.artdeco-toast-item--success', { visible: true, timeout: 15000 })
+            page.click(config.selectors.postSubmitEnabled),
+            page.waitForSelector(config.selectors.postSuccessToast, { visible: true, timeout: config.timeouts.postSuccess })
         ]);
         console.log('✅ Post submitted and success notification confirmed.');
     } catch (postError) {
         console.error('❌ Failed during post creation. Could not confirm post success toast.', postError);
         // Taking a screenshot on post failure is crucial for debugging UI issues.
-        const screenshotPath = path.join(process.env.RENDER_DISK_MOUNT_PATH || '.', 'post-failure-screenshot.png');
+        const screenshotPath = path.join(process.env.RENDER_DISK_MOUNT_PATH || '.', config.paths.postScreenshot);
         try {
             await page.screenshot({ path: screenshotPath, fullPage: true });
             console.log(`📸 Screenshot of the post failure saved to ${screenshotPath}`);
@@ -221,7 +230,7 @@ async function postToLinkedIn() {
 
         // Define a persistent user data directory to maintain login sessions across runs.
         // This is crucial for avoiding repeated logins that can trigger security checks.
-        const userDataDir = path.join(process.env.RENDER_DISK_MOUNT_PATH || '.', 'puppeteer_user_data');
+        const userDataDir = path.join(process.env.RENDER_DISK_MOUNT_PATH || '.', 'puppeteer_user_data'); // Note: path not in config as it's specific to this file's logic
         console.log(`ℹ️  Using user data directory: ${userDataDir}`);
 
         // Add args for compatibility with cloud/container environments
