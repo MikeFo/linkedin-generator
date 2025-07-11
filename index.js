@@ -86,7 +86,10 @@ function selectPostContent() {
 async function loginToLinkedIn(page, isHeadless) {
     // Go to the feed page directly. If we have a valid session cookie, this will work.
     // If not, LinkedIn will redirect to a login page.
-    await page.goto(config.urls.feed, { waitUntil: 'networkidle2', timeout: config.timeouts.navigation });
+    // Using 'domcontentloaded' is more reliable for single-page applications like LinkedIn,
+    // which may have ongoing network activity that prevents 'networkidle2' from resolving.
+    // We will explicitly wait for the necessary selector after navigation.
+    await page.goto(config.urls.feed, { waitUntil: 'domcontentloaded', timeout: config.timeouts.navigation });
 
     // Check if we are already logged in by looking for a key element on the feed.
     const isLoggedIn = await page.waitForSelector(config.selectors.feedConfirmation, { visible: true, timeout: config.timeouts.element })
