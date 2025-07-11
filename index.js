@@ -65,7 +65,6 @@ function selectPostContent() {
     }
 
     for (const topic of topicsToTry) {
-        console.log(`Trying to find an unposted message in topic: ${topic}`);
         const topicContent = content.topics[topic];
         const unpostedMessages = topicContent.filter(post => !postedHistory.includes(post.message));
 
@@ -118,8 +117,8 @@ async function loginToLinkedIn(page) {
         // The page should have already redirected to the login page.
         // We just need to find the input fields and fill them out.
         await page.waitForSelector(config.selectors.loginUsername, { visible: true, timeout: config.timeouts.element });
-        await page.type('#username', process.env.LINKEDIN_EMAIL, { delay: 50 });
-        await page.type('#password', process.env.LINKEDIN_PASSWORD, { delay: 50 });
+        await page.type(config.selectors.loginUsername, process.env.LINKEDIN_EMAIL, { delay: 50 });
+        await page.type(config.selectors.loginPassword, process.env.LINKEDIN_PASSWORD, { delay: 50 });
         await page.waitForSelector(config.selectors.loginSubmit, { visible: true, timeout: config.timeouts.element });
         await page.click(config.selectors.loginSubmit);
 
@@ -233,9 +232,13 @@ async function postToLinkedIn() {
         const userDataDir = path.join(process.env.RENDER_DISK_MOUNT_PATH || '.', 'puppeteer_user_data'); // Note: path not in config as it's specific to this file's logic
         console.log(`ℹ️  Using user data directory: ${userDataDir}`);
 
+        // Default to "new" headless mode, but allow overriding for local debugging.
+        const isHeadless = process.env.PUPPETEER_HEADLESS !== 'false';
+        console.log(`ℹ️  Launching browser in ${isHeadless ? 'headless' : 'headed'} mode.`);
+
         // Add args for compatibility with cloud/container environments
         browser = await puppeteer.launch({
-            headless: "new",
+            headless: isHeadless ? "new" : false,
             // When running in a container, we should be explicit about the executable path.
             // The official Puppeteer image sets this environment variable for us.
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
