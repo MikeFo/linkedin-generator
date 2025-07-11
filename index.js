@@ -83,7 +83,7 @@ function selectPostContent() {
  * Logs into LinkedIn using credentials from environment variables.
  * @param {import('puppeteer').Page} page The Puppeteer page object.
  */
-async function loginToLinkedIn(page) {
+async function loginToLinkedIn(page, isHeadless) {
     // Go to the feed page directly. If we have a valid session cookie, this will work.
     // If not, LinkedIn will redirect to a login page.
     await page.goto(config.urls.feed, { waitUntil: 'networkidle2', timeout: config.timeouts.navigation });
@@ -125,13 +125,22 @@ async function loginToLinkedIn(page) {
         // After submitting, we must determine what page loads next. It could be the feed (success)
         // or another security challenge (failure). We use Promise.race to see what appears first.
         console.log('➡️ Verifying page after login submission...');
-        await Promise.race([
-            page.waitForSelector(config.selectors.feedConfirmation, { visible: true, timeout: config.timeouts.verification }),
-            page.waitForSelector(config.selectors.securityCheck, { visible: true, timeout: config.timeouts.verification }).then(() => {
-                // If the security check selector appears first, we throw a specific error to be caught below.
-                throw new Error('LinkedIn presented a security challenge *after* submitting credentials. Manual intervention is required.');
-            })
-        ]);
+
+        if (isHeadless) {
+            // For automated (headless) runs, use the fast, racy check.
+            await Promise.race([
+                page.waitForSelector(config.selectors.feedConfirmation, { visible: true, timeout: config.timeouts.verification }),
+                page.waitForSelector(config.selectors.securityCheck, { visible: true, timeout: config.timeouts.verification }).then(() => {
+                    throw new Error('LinkedIn presented a security challenge *after* submitting credentials.');
+                })
+            ]);
+        } else {
+            // For manual (headed) runs, give the user plenty of time to solve challenges.
+            // The script will wait patiently for the main feed to appear.
+            console.log('ℹ️ Headed mode: Waiting up to 5 minutes for you to manually complete login/challenges and land on the feed page...');
+            await page.waitForSelector(config.selectors.feedConfirmation, { visible: true, timeout: 300000 }); // 5 minutes
+        }
+
         console.log('✅ Login successful and new session created.');
     } catch (loginError) {
         // Enhance error reporting by checking the URL for security checkpoints.
@@ -251,7 +260,7 @@ async function postToLinkedIn() {
         const page = await browser.newPage();
         await page.setViewport({ width: 1280, height: 800 });
 
-        await loginToLinkedIn(page);
+        await loginToLinkedIn(page, isHeadless);
         await createLinkedInPost(page, postContent);
 
         console.log('✅ Post submitted successfully!');
